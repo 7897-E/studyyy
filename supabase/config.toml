@@ -1,0 +1,4 @@
+project_id = "tbtupwlybukljcxlkcao"
+
+[functions.format-notes]
+verify_jwt = false
