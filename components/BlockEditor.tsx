@@ -154,6 +154,12 @@ export function BlockEditor({
 
   async function formatDocument() {
     onStatus("Formatting with Owl Alpha...");
+    console.groupCollapsed("[studyyy format] Ran format command");
+    console.log("Ran format command", {
+      pageId,
+      workspaceId,
+      time: new Date().toISOString(),
+    });
 
     try {
       const liveBlocks = editor.document;
@@ -167,18 +173,38 @@ export function BlockEditor({
       const input = markdown || plainText;
 
       if (!input) {
+        console.warn("No page content found. Nothing was sent to AI.");
         onStatus("Add notes before formatting.");
         return;
       }
 
-      const { data, error } = await supabase.functions.invoke("format-notes", {
-        body: {
-          text: input,
-          content: input,
-          blocks: liveBlocks,
-          workspaceId,
-          pageId,
-        },
+      console.log("Connected to AI", {
+        functionName: "format-notes",
+        provider: "OpenRouter",
+        model: "openrouter/owl-alpha",
+      });
+
+      const formatPayload = {
+        text: input,
+        content: input,
+        blocks: liveBlocks,
+        workspaceId,
+        pageId,
+      };
+
+      console.log("Sent message to AI", {
+        inputLength: input.length,
+        input,
+        blockCount: liveBlocks.length,
+      });
+
+      const { data, error } = await supabase.functions.invoke("format-notes", { body: formatPayload });
+
+      console.log("Message received from AI", {
+        data,
+        error,
+        formattedLength: typeof data?.formatted === "string" ? data.formatted.length : 0,
+        formatted: data?.formatted,
       });
 
       if (error) {
@@ -189,13 +215,34 @@ export function BlockEditor({
         throw new Error(data?.error ?? "No formatted output returned.");
       }
 
-      const formattedBlocks = await editor.tryParseMarkdownToBlocks(data.formatted);
-      editor.replaceBlocks(editor.document, formattedBlocks);
-      onChange(editor.document as any);
+      let formattedBlocks: PartialBlock<any, any, any>[];
+
+      try {
+        formattedBlocks = await editor.tryParseMarkdownToBlocks(data.formatted);
+        console.log("Parsed AI Markdown into BlockNote blocks", {
+          formattedBlockCount: formattedBlocks.length,
+        });
+      } catch (parseError) {
+        console.warn("Could not parse AI Markdown. Falling back to plain text blocks.", parseError);
+        formattedBlocks = textToBlocks(data.formatted);
+      }
+
+      const replacement = editor.replaceBlocks(editor.document, formattedBlocks as any);
+      const nextBlocks = replacement.insertedBlocks.length ? replacement.insertedBlocks : editor.document;
+
+      console.log("Applied AI response to editor", {
+        insertedBlockCount: replacement.insertedBlocks.length,
+        removedBlockCount: replacement.removedBlocks.length,
+        nextBlockCount: nextBlocks.length,
+      });
+
+      onChange(nextBlocks as any);
       onStatus("Formatted with Owl Alpha.");
     } catch (error) {
-      console.error(error);
+      console.error("[studyyy format] Format failed", error);
       onStatus(error instanceof Error ? error.message : "Formatting failed.");
+    } finally {
+      console.groupEnd();
     }
   }
 
@@ -406,6 +453,7 @@ export function BlockEditor({
           stop={stopLectureDictation}
         />
       ) : null}
+
     </>
   );
 }
