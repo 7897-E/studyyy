@@ -103,9 +103,7 @@ export default function AuthPage() {
       <form onSubmit={handleSubmit} className="w-full max-w-sm">
         <div className="mb-8">
           <div className="mb-4 flex items-center justify-between">
-            <div className="grid h-16 w-16 place-items-center rounded-lg bg-[var(--page-chip)] text-2xl font-semibold text-[var(--faint)]">
-              S
-            </div>
+            <div />
             <button
               type="button"
               onClick={toggleTheme}
