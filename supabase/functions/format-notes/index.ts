@@ -81,15 +81,6 @@ Deno.serve(async (req) => {
     const data = await readOpenRouterResponse(response);
     const responseSummary = summarizeOpenRouterResponse(data);
 
-    console.log(
-      JSON.stringify({
-        event: "openrouter-response-received",
-        status: response.status,
-        ok: response.ok,
-        summary: responseSummary,
-      })
-    );
-
     if (!response.ok) {
       return json(
         {
@@ -114,7 +105,6 @@ Deno.serve(async (req) => {
     const formatted = extractFormattedText(data);
 
     if (!formatted) {
-      console.error("OpenRouter empty response:", JSON.stringify(data).slice(0, 3000));
       return json(
         {
           error: "No formatted output returned from OpenRouter.",
@@ -124,26 +114,11 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(
-      JSON.stringify({
-        workspaceId: body?.workspaceId,
-        pageId: body?.pageId,
-        model: data?.model ?? OPENROUTER_MODEL,
-        inputLength: input.length,
-        outputLength: formatted.length,
-      })
-    );
-
     return json({
       formatted,
       model: data?.model ?? OPENROUTER_MODEL,
-      debug: {
-        openRouterStatus: response.status,
-        ...responseSummary,
-      },
     });
   } catch (error) {
-    console.error(error);
     return json({ error: error instanceof Error ? error.message : "Unknown format-notes error." }, 500);
   }
 });

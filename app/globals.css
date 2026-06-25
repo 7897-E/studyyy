@@ -214,6 +214,33 @@ body {
   white-space: nowrap;
 }
 
+.format-dot {
+  animation: format-dot-pulse 1.15s infinite ease-in-out;
+  opacity: 0.25;
+}
+
+.format-dot-two {
+  animation-delay: 0.16s;
+}
+
+.format-dot-three {
+  animation-delay: 0.32s;
+}
+
+@keyframes format-dot-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+
+  40% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
 button,
 input,
 textarea {

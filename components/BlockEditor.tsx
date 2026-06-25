@@ -122,6 +122,12 @@ type DateTimePickerState = {
   top: number;
 } | null;
 
+type FormatProgressState = {
+  message: string;
+  left: number;
+  top: number;
+} | null;
+
 const DICTATION_CONSENT_KEY = "studyyy-lecture-dictation-consent";
 
 export function BlockEditor({
@@ -134,11 +140,13 @@ export function BlockEditor({
   onStatus,
 }: BlockEditorProps) {
   const [dateTimePicker, setDateTimePicker] = useState<DateTimePickerState>(null);
+  const [formatProgress, setFormatProgress] = useState<FormatProgressState>(null);
   const [customTime, setCustomTime] = useState("");
   const [dictating, setDictating] = useState(false);
   const [dictationConsentOpen, setDictationConsentOpen] = useState(false);
   const [dictationText, setDictationText] = useState("");
   const recognitionRef = useRef<any>(null);
+  const formattingRef = useRef(false);
   const editor = useCreateBlockNote(
     {
       schema: editorSchema,
@@ -153,13 +161,12 @@ export function BlockEditor({
   );
 
   async function formatDocument() {
+    if (formattingRef.current) return;
+
+    formattingRef.current = true;
     onStatus("Formatting with Owl Alpha...");
-    console.groupCollapsed("[studyyy format] Ran format command");
-    console.log("Ran format command", {
-      pageId,
-      workspaceId,
-      time: new Date().toISOString(),
-    });
+    const progressPosition = getEditorPopupPosition(editor, 280, 110);
+    setFormatProgress({ message: "Collecting notes", ...progressPosition });
 
     try {
       const liveBlocks = editor.document;
@@ -173,16 +180,12 @@ export function BlockEditor({
       const input = markdown || plainText;
 
       if (!input) {
-        console.warn("No page content found. Nothing was sent to AI.");
+        setFormatProgress(null);
         onStatus("Add notes before formatting.");
         return;
       }
 
-      console.log("Connected to AI", {
-        functionName: "format-notes",
-        provider: "OpenRouter",
-        model: "openrouter/owl-alpha",
-      });
+      setFormatProgress({ message: "Connecting to Owl Alpha", ...progressPosition });
 
       const formatPayload = {
         text: input,
@@ -192,20 +195,10 @@ export function BlockEditor({
         pageId,
       };
 
-      console.log("Sent message to AI", {
-        inputLength: input.length,
-        input,
-        blockCount: liveBlocks.length,
-      });
-
+      setFormatProgress({ message: "Sending message", ...progressPosition });
       const { data, error } = await supabase.functions.invoke("format-notes", { body: formatPayload });
 
-      console.log("Message received from AI", {
-        data,
-        error,
-        formattedLength: typeof data?.formatted === "string" ? data.formatted.length : 0,
-        formatted: data?.formatted,
-      });
+      setFormatProgress({ message: "Message received", ...progressPosition });
 
       if (error) {
         throw new Error(error.message);
@@ -218,31 +211,26 @@ export function BlockEditor({
       let formattedBlocks: PartialBlock<any, any, any>[];
 
       try {
+        setFormatProgress({ message: "Reading response", ...progressPosition });
         formattedBlocks = await editor.tryParseMarkdownToBlocks(data.formatted);
-        console.log("Parsed AI Markdown into BlockNote blocks", {
-          formattedBlockCount: formattedBlocks.length,
-        });
       } catch (parseError) {
-        console.warn("Could not parse AI Markdown. Falling back to plain text blocks.", parseError);
         formattedBlocks = textToBlocks(data.formatted);
       }
 
-      const replacement = editor.replaceBlocks(editor.document, formattedBlocks as any);
-      const nextBlocks = replacement.insertedBlocks.length ? replacement.insertedBlocks : editor.document;
+      setFormatProgress({ message: "Updating page", ...progressPosition });
+      editor.replaceBlocks(editor.document, formattedBlocks as any);
 
-      console.log("Applied AI response to editor", {
-        insertedBlockCount: replacement.insertedBlocks.length,
-        removedBlockCount: replacement.removedBlocks.length,
-        nextBlockCount: nextBlocks.length,
+      window.requestAnimationFrame(() => {
+        onChange(editor.document as any);
       });
-
-      onChange(nextBlocks as any);
       onStatus("Formatted with Owl Alpha.");
     } catch (error) {
-      console.error("[studyyy format] Format failed", error);
       onStatus(error instanceof Error ? error.message : "Formatting failed.");
     } finally {
-      console.groupEnd();
+      window.setTimeout(() => {
+        formattingRef.current = false;
+        setFormatProgress(null);
+      }, 450);
     }
   }
 
@@ -374,7 +362,10 @@ export function BlockEditor({
       <BlockNoteView
         editor={editor}
         theme={theme}
-        onChange={() => onChange(editor.document as any)}
+        onChange={() => {
+          if (formattingRef.current) return;
+          onChange(editor.document as any);
+        }}
         slashMenu={false}
         formattingToolbar
         sideMenu
@@ -454,6 +445,7 @@ export function BlockEditor({
         />
       ) : null}
 
+      {formatProgress ? <FormatProgressPopover progress={formatProgress} /> : null}
     </>
   );
 }
@@ -1072,6 +1064,32 @@ function LectureDictationStatus({
   );
 }
 
+function FormatProgressPopover({ progress }: { progress: Exclude<FormatProgressState, null> }) {
+  return (
+    <div
+      className="fixed z-[260] w-64 rounded border border-[var(--line)] bg-[var(--page-bg)] p-3 text-[var(--text)] shadow-xl"
+      style={{ left: progress.left, top: progress.top }}
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <div className="flex items-center gap-3">
+        <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded bg-[var(--page-chip)]">
+          <RiMagicLine size={16} className="text-[var(--muted)]" />
+          <span className="absolute h-8 w-8 animate-ping rounded bg-[var(--selected)]" />
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{progress.message}</p>
+          <div className="mt-1 flex items-center gap-1 text-xs text-[var(--muted)]">
+            <span>Formatting</span>
+            <span className="format-dot format-dot-one">.</span>
+            <span className="format-dot format-dot-two">.</span>
+            <span className="format-dot format-dot-three">.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DateTimePickerPopover({
   picker,
   customTime,
@@ -1151,7 +1169,7 @@ function DateTimePickerPopover({
   );
 }
 
-function getEditorPopupPosition(editor: any) {
+function getEditorPopupPosition(editor: any, width = 280, height = 280) {
   const fallback = editor.domElement?.getBoundingClientRect();
   let rect = window.getSelection()?.rangeCount ? window.getSelection()?.getRangeAt(0).getBoundingClientRect() : null;
 
@@ -1159,8 +1177,8 @@ function getEditorPopupPosition(editor: any) {
     rect = fallback ?? null;
   }
 
-  const left = Math.min(Math.max((rect?.left ?? 120), 12), window.innerWidth - 280);
-  const top = Math.min(Math.max((rect?.bottom ?? 120) + 8, 12), window.innerHeight - 280);
+  const left = Math.min(Math.max((rect?.left ?? 120), 12), window.innerWidth - width - 12);
+  const top = Math.min(Math.max((rect?.bottom ?? 120) + 8, 12), window.innerHeight - height - 12);
 
   return { left, top };
 }
