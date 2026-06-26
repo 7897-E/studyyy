@@ -52,13 +52,18 @@
         return json({ admin: true, rootAdmin: callerEmail === ROOT_ADMIN_EMAIL });
       }
 
-      if (action === "grant") {
-        const email = normalizeEmail(body?.email);
-        if (!email) return json({ error: "Email is required." }, 400);
+    if (action === "grant") {
+      const email = normalizeEmail(body?.email);
+      if (!email) return json({ error: "Email is required." }, 400);
 
-        const { error } = await admin.from("admin_users").upsert(
-          {
-            email,
+      const existingUser = await findUserByEmail(admin, email);
+      if (!existingUser) {
+        return json({ error: "That email does not belong to an existing user." }, 400);
+      }
+
+      const { error } = await admin.from("admin_users").upsert(
+        {
+          email,
             created_by: caller.id,
           },
           { onConflict: "email" }
@@ -134,10 +139,15 @@
       page += 1;
     }
 
-    return users.sort((a: any, b: any) => normalizeEmail(a.email).localeCompare(normalizeEmail(b.email)));
-  }
+  return users.sort((a: any, b: any) => normalizeEmail(a.email).localeCompare(normalizeEmail(b.email)));
+}
 
-  async function readJson(req: Request): Promise<any> {
+async function findUserByEmail(admin: any, email: string) {
+  const users = await listUsers(admin);
+  return users.find((user: any) => normalizeEmail(user.email) === email) ?? null;
+}
+
+async function readJson(req: Request): Promise<any> {
     const text = await req.text();
     if (!text.trim()) return {};
 
