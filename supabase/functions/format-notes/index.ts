@@ -20,7 +20,10 @@ Rules:
 4. Use headings, bullets, numbered lists, checkboxes, tables, dividers, and blockquotes where they improve readability.
 5. Use ## for main sections and ### for subsections. Use # only when the input clearly has a single title.
 6. Keep the result immediately usable as a Notion page.
-7. If the notes are short, still return the improved Markdown instead of returning nothing.`;
+7. If the notes are short, still return the improved Markdown instead of returning nothing.
+8. If the input contains code, keep it inside fenced code blocks and preserve indentation.
+9. Do not convert URLs into angle-bracket links, and do not convert dotted identifiers like client.chat into Markdown links.
+10. Do not repeat API keys or secrets; replace them with placeholders like <NVIDIA_API_KEY>.`;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -37,7 +40,7 @@ Deno.serve(async (req) => {
 
   try {
     const body = await readJson(req);
-    const input = getInputText(body);
+    const input = redactSecrets(getInputText(body));
 
     if (!input) {
       return json({ error: "No text provided. Add notes before formatting." }, 400);
@@ -102,7 +105,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const formatted = extractFormattedText(data);
+    const formatted = redactSecrets(extractFormattedText(data));
 
     if (!formatted) {
       return json(
@@ -260,6 +263,16 @@ function preview(value: unknown): string {
 
 function clean(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function redactSecrets(value: string): string {
+  return value
+    .replace(/nvapi-[A-Za-z0-9_-]+/g, "<NVIDIA_API_KEY>")
+    .replace(/sk-or-v1-[A-Za-z0-9_-]+/g, "<OPENROUTER_API_KEY>")
+    .replace(/sk-proj-[A-Za-z0-9_-]+/g, "<OPENAI_API_KEY>")
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, "<API_KEY>")
+    .replace(/sb_secret_[A-Za-z0-9_-]+/g, "<SUPABASE_SECRET_KEY>")
+    .replace(/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, "<JWT>");
 }
 
 function json(body: Record<string, unknown>, status = 200) {

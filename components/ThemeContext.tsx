@@ -25,6 +25,7 @@ type InterfaceSettings = {
   fontScale: FontScale;
   sidebarDensity: SidebarDensity;
   reduceMotion: boolean;
+  showChatActivity: boolean;
 };
 
 interface ThemeContextValue {
@@ -60,6 +61,7 @@ const defaultInterfaceSettings: InterfaceSettings = {
   fontScale: "normal",
   sidebarDensity: "comfortable",
   reduceMotion: false,
+  showChatActivity: true,
 };
 
 const cssVariableByColor: Record<keyof CustomTheme, string> = {
@@ -141,6 +143,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.dataset.fontScale = interfaceSettings.fontScale;
     root.dataset.sidebarDensity = interfaceSettings.sidebarDensity;
     root.dataset.reduceMotion = interfaceSettings.reduceMotion ? "true" : "false";
+    root.dataset.showChatActivity = interfaceSettings.showChatActivity ? "true" : "false";
     window.localStorage.setItem("studyyy-interface-settings", JSON.stringify(interfaceSettings));
   }, [interfaceSettings]);
 

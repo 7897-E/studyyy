@@ -32,12 +32,21 @@ interface AdminPanelUser {
   isRootAdmin: boolean;
 }
 
+interface ChatModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+}
+
 export function Sidebar({ workspace, user }: { workspace: Workspace; user: User }) {
   const [pages, setPages] = useState<PageRecord[]>([]);
   const [creating, setCreating] = useState(false);
   const [deleteMenuPageId, setDeleteMenuPageId] = useState<string | null>(null);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminPanelUser[]>([]);
+  const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+  const [selectedChatModel, setSelectedChatModel] = useState<ChatModelOption | null>(null);
   const [adminStatus, setAdminStatus] = useState("");
   const [adminLoading, setAdminLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -61,7 +70,7 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
     updateInterfaceSetting,
     resetInterfaceSettings,
   } = useTheme();
-  const { isAdmin } = useAdminStatus(user);
+  const { isAdmin, isRootAdmin } = useAdminStatus(user);
   const pathname = usePathname();
   const router = useRouter();
 
@@ -273,6 +282,8 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
     }
 
     setAdminUsers(data?.users ?? []);
+    setChatModelOptions(data?.chatModelOptions ?? []);
+    setSelectedChatModel(data?.selectedChatModel ?? null);
   }
 
   async function updateAdminUser(email: string, action: "grant" | "revoke") {
@@ -291,7 +302,30 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
     }
 
     setAdminUsers(data?.users ?? []);
+    setChatModelOptions(data?.chatModelOptions ?? []);
+    setSelectedChatModel(data?.selectedChatModel ?? null);
     setAdminStatus(action === "grant" ? "Admin status granted." : "Admin status revoked.");
+  }
+
+  async function updateChatModel(modelId: string) {
+    setAdminLoading(true);
+    setAdminStatus("");
+
+    const { data, error } = await supabase.functions.invoke("admin-users", {
+      body: { action: "set-chat-model", modelId },
+    });
+
+    setAdminLoading(false);
+
+    if (error) {
+      setAdminStatus(error.message);
+      return;
+    }
+
+    setAdminUsers(data?.users ?? []);
+    setChatModelOptions(data?.chatModelOptions ?? []);
+    setSelectedChatModel(data?.selectedChatModel ?? null);
+    setAdminStatus("Secret model updated.");
   }
 
   return (
@@ -381,8 +415,12 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
                 users={adminUsers}
                 loading={adminLoading}
                 status={adminStatus}
+                isRootAdmin={isRootAdmin}
+                chatModelOptions={chatModelOptions}
+                selectedChatModel={selectedChatModel}
                 refresh={loadAdminPanel}
                 updateAdminUser={updateAdminUser}
+                updateChatModel={updateChatModel}
               />
             ) : null}
           </div>
@@ -496,6 +534,16 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
                 />
               </label>
 
+              <label className="mt-2 flex min-h-8 items-center justify-between rounded px-1 text-xs text-[var(--muted)] hover:bg-[var(--hover)]">
+                <span>Show AI activity</span>
+                <input
+                  type="checkbox"
+                  checked={interfaceSettings.showChatActivity}
+                  onChange={(event) => updateInterfaceSetting("showChatActivity", event.target.checked)}
+                  className="h-4 w-4 accent-[var(--text)]"
+                />
+              </label>
+
               <div className="my-3 border-t border-[var(--line)]" />
 
               <div className="mb-2">
@@ -568,14 +616,22 @@ function AdminPanel({
   users,
   loading,
   status,
+  isRootAdmin,
+  chatModelOptions,
+  selectedChatModel,
   refresh,
   updateAdminUser,
+  updateChatModel,
 }: {
   users: AdminPanelUser[];
   loading: boolean;
   status: string;
+  isRootAdmin: boolean;
+  chatModelOptions: ChatModelOption[];
+  selectedChatModel: ChatModelOption | null;
   refresh: () => void;
   updateAdminUser: (email: string, action: "grant" | "revoke") => void;
+  updateChatModel: (modelId: string) => void;
 }) {
   return (
     <div className="notion-scrollbar absolute bottom-11 left-0 z-50 max-h-[calc(100vh-5rem)] w-80 overflow-y-auto rounded border border-[var(--line)] bg-[var(--page-bg)] p-3 text-[var(--text)] shadow-xl">
@@ -598,6 +654,31 @@ function AdminPanel({
         <p className="mb-2 rounded border border-[var(--line)] bg-[var(--page-chip)] px-2 py-1.5 text-xs text-[var(--muted)]">
           {status}
         </p>
+      ) : null}
+
+      {isRootAdmin ? (
+        <div className="mb-3 rounded border border-[var(--line)] bg-[var(--page-chip)] p-2">
+          <p className="text-xs font-semibold text-[var(--text)]">Secret model</p>
+          <p className="mt-1 text-[11px] text-[var(--muted)]">Root admin only</p>
+          <div className="mt-2 space-y-1">
+            {chatModelOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => updateChatModel(option.id)}
+                disabled={loading || selectedChatModel?.id === option.id}
+                className={`w-full rounded border px-2 py-1.5 text-left text-xs transition ${
+                  selectedChatModel?.id === option.id
+                    ? "border-[var(--text)] bg-[var(--page-bg)] text-[var(--text)]"
+                    : "border-[var(--line)] text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+                } disabled:opacity-70`}
+              >
+                <span className="block font-medium">{option.label}</span>
+                <span className="block truncate text-[11px] opacity-75">{option.model}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       ) : null}
 
       <div className="space-y-1">

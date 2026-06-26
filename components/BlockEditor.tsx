@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Block, PartialBlock } from "@blocknote/core";
 import {
   BlockNoteSchema,
@@ -18,8 +18,11 @@ import {
 import { BlockNoteView } from "@blocknote/mantine";
 import { flip, offset, shift, size } from "@floating-ui/react";
 import {
+  RiArrowLeftSLine,
+  RiArrowRightSLine,
   RiCloseLine,
   RiChat3Line,
+  RiDeleteBinLine,
   RiLayoutColumnLine,
   RiMagicLine,
   RiMicLine,
@@ -36,6 +39,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useAdminStatus } from "@/hooks/useAdminStatus";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/components/ThemeContext";
 
 interface BlockEditorProps {
   initialBlocks?: Block[];
@@ -64,7 +68,7 @@ function parseTextBoxBlocks(blocksJson: unknown, fallbackText: string): PartialB
     }
   }
 
-  return textToBlocks(fallbackText);
+  return textToSingleParagraphBlocks(fallbackText);
 }
 
 function textToBlocks(text: string): PartialBlock<any, any, any>[] {
@@ -76,16 +80,28 @@ function textToBlocks(text: string): PartialBlock<any, any, any>[] {
   }));
 }
 
-function removeTextBoxBlocks(
-  blocks?: Array<Block<any, any, any> | PartialBlock<any, any, any>>
-): PartialBlock<any, any, any>[] {
-  const sourceBlocks = blocks?.length ? blocks : emptyDocument;
+function textToSingleParagraphBlocks(text: string): PartialBlock<any, any, any>[] {
+  if (!text.trim()) return emptyDocument;
 
-  return sourceBlocks.flatMap((block: any) => {
+  return [{
+    type: "paragraph",
+    content: text,
+  }];
+}
+
+function removeTextBoxBlocks(
+  blocks?: Array<Block<any, any, any> | PartialBlock<any, any, any>>,
+  useEmptyFallback = true
+): PartialBlock<any, any, any>[] {
+  if (!blocks?.length) return useEmptyFallback ? emptyDocument : [];
+
+  return blocks.flatMap((block: any) => {
     if (block?.type !== "textBox") {
+      const children = Array.isArray(block?.children) ? removeTextBoxBlocks(block.children, false) : block?.children;
+
       return [{
         ...block,
-        children: Array.isArray(block?.children) ? removeTextBoxBlocks(block.children) : block?.children,
+        children: isOnlyEmptyParagraphChild(children) ? [] : children,
       }];
     }
 
@@ -96,6 +112,13 @@ function removeTextBoxBlocks(
 
     return parseTextBoxBlocks(existingBlocks, text);
   });
+}
+
+function isOnlyEmptyParagraphChild(children: unknown): boolean {
+  if (!Array.isArray(children) || children.length !== 1) return false;
+
+  const child: any = children[0];
+  return child?.type === "paragraph" && !inlineContentToText(child.content).trim() && !child.children?.length;
 }
 
 function inlineContentToText(content: unknown): string {
@@ -139,6 +162,19 @@ type ChatMessage = {
   content: string;
 };
 
+type ChatThread = {
+  id: string;
+  title: string;
+  updated_at?: string;
+  updatedAt?: string;
+};
+
+type ChatModelIndicator = {
+  id?: string;
+  label: string;
+  model: string;
+} | null;
+
 const DICTATION_CONSENT_KEY = "studyyy-lecture-dictation-consent";
 
 export function BlockEditor({
@@ -151,7 +187,8 @@ export function BlockEditor({
   onStatus,
 }: BlockEditorProps) {
   const { user } = useAuth();
-  const { isAdmin } = useAdminStatus(user);
+  const { isAdmin, isRootAdmin } = useAdminStatus(user);
+  const { interfaceSettings } = useTheme();
   const [dateTimePicker, setDateTimePicker] = useState<DateTimePickerState>(null);
   const [formatProgress, setFormatProgress] = useState<FormatProgressState>(null);
   const [customTime, setCustomTime] = useState("");
@@ -161,7 +198,12 @@ export function BlockEditor({
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
+  const [activeChatThreadId, setActiveChatThreadId] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatActivity, setChatActivity] = useState<string[]>([]);
+  const [chatModelIndicator, setChatModelIndicator] = useState<ChatModelIndicator>(null);
+  const [chatHistoryCollapsed, setChatHistoryCollapsed] = useState(false);
   const recognitionRef = useRef<any>(null);
   const formattingRef = useRef(false);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -173,10 +215,50 @@ export function BlockEditor({
         ...locales.en,
         multi_column: multiColumnLocales.en,
       },
+      tabBehavior: "prefer-indent",
       initialContent: removeTextBoxBlocks(initialBlocks) as any,
     },
     []
   );
+
+  const loadChatThreads = useCallback(async () => {
+    try {
+      const data = await callChatFunction({ action: "list", workspaceId });
+      setChatThreads(data?.threads ?? []);
+    } catch (error) {
+      onStatus(error instanceof Error ? error.message : "Could not load chat history.");
+    }
+  }, [workspaceId, onStatus]);
+
+  useEffect(() => {
+    if (!chatOpen || !isAdmin) return;
+    loadChatThreads();
+  }, [chatOpen, isAdmin, loadChatThreads]);
+
+  useEffect(() => {
+    if (!chatOpen || !isRootAdmin) {
+      setChatModelIndicator(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadChatModel() {
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: { action: "list" },
+      });
+
+      if (!cancelled) {
+        setChatModelIndicator(error ? null : data?.selectedChatModel ?? null);
+      }
+    }
+
+    loadChatModel();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatOpen, isRootAdmin]);
 
   async function formatDocument() {
     if (formattingRef.current) return;
@@ -376,61 +458,76 @@ export function BlockEditor({
   }
 
   async function sendChatMessage() {
-    const message = chatInput.trim();
+    const message = redactChatSecrets(chatInput.trim());
     if (!message || chatLoading) return;
 
     const nextMessages: ChatMessage[] = [...chatMessages, { role: "user", content: message }];
     setChatMessages(nextMessages);
     setChatInput("");
     setChatLoading(true);
+    setChatActivity(["Reading current page and workspace pages"]);
     onStatus("Sending chat message...");
 
     const controller = new AbortController();
     chatAbortRef.current = controller;
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-
-      if (!token) {
-        throw new Error("Sign in again to use admin chat.");
-      }
-
       const pageContext = (await editor.blocksToMarkdownLossy(editor.document)).trim() || blocksToPlainText(editor.document).trim();
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/chat-notes`, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
+      setChatActivity(["Reading current page and workspace pages", "Writing response"]);
+      setChatMessages([...nextMessages, { role: "assistant", content: "" }]);
+
+      const data = await callStreamingChatFunction(
+        {
+          action: "send",
+          stream: true,
+          threadId: activeChatThreadId,
           messages: nextMessages.slice(-12),
           pageContext,
           pageId,
           workspaceId,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error ?? "Chat request failed.");
-      }
+        },
+        controller.signal,
+        {
+          onActivity: (nextActivity) => setChatActivity(nextActivity),
+          onToken: (raw) => {
+            const preview = streamingReplyPreview(raw);
+            setChatMessages((current) => replaceLastAssistantMessage(current, preview || "Writing response..."));
+          },
+        }
+      );
 
       if (!data?.reply) {
         throw new Error("No chat response returned.");
       }
 
-      setChatMessages((current) => [...current, { role: "assistant", content: data.reply }]);
-      onStatus("Chat response received.");
+      if (data.thread?.id) {
+        setActiveChatThreadId(data.thread.id);
+      }
+
+      if (data.history?.threads) {
+        setChatThreads(data.history.threads);
+      }
+
+      if (Array.isArray(data.activity)) {
+        setChatActivity(data.activity);
+      }
+
+      setChatMessages((current) => replaceLastAssistantMessage(current, data.reply));
+
+      if (typeof data.pageEditMarkdown === "string" && data.pageEditMarkdown.trim()) {
+        await applyChatPageEdit(data.pageEditMarkdown);
+        onStatus("Chat updated the page.");
+      } else {
+        onStatus("Chat response received.");
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
+        setChatMessages((current) => removeEmptyLastAssistantMessage(current));
         onStatus("Chat stopped.");
         return;
       }
 
+      setChatMessages((current) => removeEmptyLastAssistantMessage(current));
       onStatus(error instanceof Error ? error.message : "Chat failed.");
     } finally {
       if (chatAbortRef.current === controller) {
@@ -440,10 +537,181 @@ export function BlockEditor({
     }
   }
 
+  async function callChatFunction(body: Record<string, unknown>, signal?: AbortSignal) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      throw new Error("Sign in again to use admin chat.");
+    }
+
+    const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/chat-notes`, {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data?.error ?? "Chat request failed.");
+    }
+
+    return data;
+  }
+
+  async function callStreamingChatFunction(
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+    handlers: {
+      onActivity: (activity: string[]) => void;
+      onToken: (raw: string) => void;
+    }
+  ) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      throw new Error("Sign in again to use admin chat.");
+    }
+
+    const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/chat-notes`, {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error ?? "Chat request failed.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let raw = "";
+    let completeData: any = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const eventText of events) {
+        const event = parseSseEvent(eventText);
+        if (!event) continue;
+
+        if (event.name === "activity" && Array.isArray(event.data?.activity)) {
+          handlers.onActivity(event.data.activity);
+          continue;
+        }
+
+        if (event.name === "token" && typeof event.data?.text === "string") {
+          raw += event.data.text;
+          handlers.onToken(raw);
+          continue;
+        }
+
+        if (event.name === "complete") {
+          completeData = event.data;
+          continue;
+        }
+
+        if (event.name === "error") {
+          throw new Error(event.data?.error ?? "Chat stream failed.");
+        }
+      }
+    }
+
+    if (!completeData) {
+      throw new Error("Chat stream ended before completion.");
+    }
+
+    return completeData;
+  }
+
+  async function createNewChat() {
+    try {
+      const data = await callChatFunction({ action: "create", workspaceId });
+      setActiveChatThreadId(data?.thread?.id ?? null);
+      setChatMessages([]);
+      setChatActivity([]);
+      await loadChatThreads();
+    } catch (error) {
+      onStatus(error instanceof Error ? error.message : "Could not create chat.");
+    }
+  }
+
+  async function loadChatThread(threadId: string) {
+    try {
+      const data = await callChatFunction({ action: "load", threadId });
+      setActiveChatThreadId(data?.thread?.id ?? threadId);
+      setChatMessages((data?.messages ?? []).map((message: any) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: message.content,
+      })));
+      setChatActivity([]);
+    } catch (error) {
+      onStatus(error instanceof Error ? error.message : "Could not load chat.");
+    }
+  }
+
+  async function deleteChatThread(threadId: string) {
+    try {
+      const data = await callChatFunction({ action: "delete", threadId, workspaceId });
+      setChatThreads(data?.threads ?? []);
+
+      if (threadId === activeChatThreadId) {
+        setActiveChatThreadId(null);
+        setChatMessages([]);
+        setChatActivity([]);
+      }
+    } catch (error) {
+      onStatus(error instanceof Error ? error.message : "Could not delete chat.");
+    }
+  }
+
   function stopChat() {
     chatAbortRef.current?.abort();
     chatAbortRef.current = null;
     setChatLoading(false);
+  }
+
+  async function applyChatPageEdit(markdown: string) {
+    formattingRef.current = true;
+
+    try {
+      let editedBlocks: PartialBlock<any, any, any>[];
+
+      try {
+        editedBlocks = await editor.tryParseMarkdownToBlocks(markdown);
+      } catch {
+        editedBlocks = textToBlocks(markdown);
+      }
+
+      editor.replaceBlocks(editor.document, editedBlocks as any);
+
+      window.requestAnimationFrame(() => {
+        onChange(editor.document as any);
+      });
+    } finally {
+      window.setTimeout(() => {
+        formattingRef.current = false;
+      }, 250);
+    }
   }
 
   return (
@@ -551,9 +819,19 @@ export function BlockEditor({
       {chatOpen && isAdmin ? (
         <AdminChatSidebar
           messages={chatMessages}
+          threads={chatThreads}
+          activeThreadId={activeChatThreadId}
           input={chatInput}
           loading={chatLoading}
+          activity={chatActivity}
+          showActivity={interfaceSettings.showChatActivity}
+          modelIndicator={isRootAdmin ? chatModelIndicator : null}
           setInput={setChatInput}
+          newChat={createNewChat}
+          selectThread={loadChatThread}
+          deleteThread={deleteChatThread}
+          historyCollapsed={chatHistoryCollapsed}
+          setHistoryCollapsed={setChatHistoryCollapsed}
           close={() => setChatOpen(false)}
           send={sendChatMessage}
           stop={stopChat}
@@ -1063,6 +1341,111 @@ function getCustomColumnItems(editor: any): DefaultReactSuggestionItem[] {
   })) as DefaultReactSuggestionItem[];
 }
 
+function parseSseEvent(eventText: string): { name: string; data: any } | null {
+  const lines = eventText.split("\n");
+  const name = lines.find((line) => line.startsWith("event:"))?.replace(/^event:\s?/, "").trim() || "message";
+  const dataText = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.replace(/^data:\s?/, ""))
+    .join("\n");
+
+  if (!dataText) return null;
+
+  try {
+    return { name, data: JSON.parse(dataText) };
+  } catch {
+    return null;
+  }
+}
+
+function replaceLastAssistantMessage(messages: ChatMessage[], content: string): ChatMessage[] {
+  if (!messages.length || messages[messages.length - 1].role !== "assistant") {
+    return [...messages, { role: "assistant", content }];
+  }
+
+  return messages.map((message, index) => (index === messages.length - 1 ? { ...message, content } : message));
+}
+
+function removeEmptyLastAssistantMessage(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.at(-1);
+  if (last?.role === "assistant" && !last.content.trim()) {
+    return messages.slice(0, -1);
+  }
+
+  return messages;
+}
+
+function streamingReplyPreview(raw: string): string {
+  const trimmed = stripFence(raw.trim());
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed?.reply === "string") return parsed.reply;
+  } catch {
+    // Partial JSON is expected while streaming.
+  }
+
+  const partialReply = extractPartialJsonString(trimmed, "reply");
+  if (partialReply) return partialReply;
+
+  return trimmed.startsWith("{") ? "" : trimmed;
+}
+
+function extractPartialJsonString(source: string, key: string): string {
+  const keyIndex = source.indexOf(`"${key}"`);
+  if (keyIndex === -1) return "";
+
+  const colonIndex = source.indexOf(":", keyIndex);
+  if (colonIndex === -1) return "";
+
+  const quoteIndex = source.indexOf('"', colonIndex + 1);
+  if (quoteIndex === -1) return "";
+
+  let value = "";
+  let escaped = false;
+
+  for (let index = quoteIndex + 1; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (escaped) {
+      value += `\\${char}`;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') break;
+    value += char;
+  }
+
+  try {
+    return JSON.parse(`"${value}"`);
+  } catch {
+    return value.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+  }
+}
+
+function stripFence(value: string): string {
+  return value
+    .replace(/^```(?:json|markdown|md)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+function redactChatSecrets(value: string): string {
+  return value
+    .replace(/nvapi-[A-Za-z0-9_-]+/g, "<NVIDIA_API_KEY>")
+    .replace(/sk-or-v1-[A-Za-z0-9_-]+/g, "<OPENROUTER_API_KEY>")
+    .replace(/sk-proj-[A-Za-z0-9_-]+/g, "<OPENAI_API_KEY>")
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, "<API_KEY>")
+    .replace(/sb_secret_[A-Za-z0-9_-]+/g, "<SUPABASE_SECRET_KEY>")
+    .replace(/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, "<JWT>");
+}
+
 function replaceCurrentBlock(editor: any, blocks: PartialBlock<any, any, any>[]) {
   const currentBlock = editor.getTextCursorPosition().block;
   editor.replaceBlocks([currentBlock], blocks as any);
@@ -1205,101 +1588,256 @@ function FormatProgressPopover({ progress }: { progress: Exclude<FormatProgressS
 
 function AdminChatSidebar({
   messages,
+  threads,
+  activeThreadId,
   input,
   loading,
+  activity,
+  showActivity,
+  modelIndicator,
   setInput,
+  newChat,
+  selectThread,
+  deleteThread,
+  historyCollapsed,
+  setHistoryCollapsed,
   close,
   send,
   stop,
 }: {
   messages: ChatMessage[];
+  threads: ChatThread[];
+  activeThreadId: string | null;
   input: string;
   loading: boolean;
+  activity: string[];
+  showActivity: boolean;
+  modelIndicator: ChatModelIndicator;
   setInput: (value: string) => void;
+  newChat: () => void;
+  selectThread: (threadId: string) => void;
+  deleteThread: (threadId: string) => void;
+  historyCollapsed: boolean;
+  setHistoryCollapsed: (collapsed: boolean) => void;
   close: () => void;
   send: () => void;
   stop: () => void;
 }) {
-  return (
-    <aside className="fixed right-0 top-0 z-[280] flex h-screen w-[min(380px,100vw)] flex-col border-l border-[var(--line)] bg-[var(--page-bg)] text-[var(--text)] shadow-2xl">
-      <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">AI chat</p>
-          <p className="truncate text-xs text-[var(--muted)]">Admin only</p>
-        </div>
-        <button
-          type="button"
-          onClick={close}
-          className="grid h-8 w-8 place-items-center rounded text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
-          title="Close chat"
-        >
-          <RiCloseLine size={18} />
-        </button>
-      </div>
+  const visibleActivity = showActivity ? activity : [];
+  const shouldShowActivityStatus = loading && visibleActivity.length > 0;
 
-      <div className="notion-scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4">
-        {messages.length ? (
-          messages.map((message, index) => (
-            <div
-              key={`${message.role}-${index}`}
-              className={`rounded border border-[var(--line)] px-3 py-2 text-sm leading-6 ${
-                message.role === "user" ? "bg-[var(--page-chip)]" : "bg-[var(--page-bg)]"
-              }`}
+  return (
+    <aside className="fixed right-0 top-0 z-[280] flex h-screen w-[min(620px,100vw)] border-l border-[var(--line)] bg-[var(--page-bg)] text-[var(--text)] shadow-2xl">
+      <div
+        className={`hidden shrink-0 flex-col border-r border-[var(--line)] bg-[var(--page-chip)] transition-[width] sm:flex ${
+          historyCollapsed ? "w-11" : "w-56"
+        }`}
+      >
+        <div className="border-b border-[var(--line)] px-3 py-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            {historyCollapsed ? null : <p className="text-xs font-semibold text-[var(--muted)]">Chat history</p>}
+            <button
+              type="button"
+              onClick={() => setHistoryCollapsed(!historyCollapsed)}
+              className="grid h-7 w-7 place-items-center rounded border border-[var(--line)] bg-[var(--page-bg)] text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+              title={historyCollapsed ? "Show chat history" : "Collapse chat history"}
             >
-              <p className="mb-1 text-xs font-semibold uppercase tracking-normal text-[var(--muted)]">
-                {message.role === "user" ? "You" : "Owl Alpha"}
+              {historyCollapsed ? <RiArrowRightSLine size={16} /> : <RiArrowLeftSLine size={16} />}
+            </button>
+          </div>
+          {historyCollapsed ? null : (
+            <button
+              type="button"
+              onClick={newChat}
+              className="w-full rounded border border-[var(--line)] bg-[var(--page-bg)] px-2 py-1.5 text-xs font-medium text-[var(--text)] hover:bg-[var(--hover)]"
+            >
+              New chat
+            </button>
+          )}
+        </div>
+        {historyCollapsed ? null : (
+          <div className="notion-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
+            {threads.length ? (
+              threads.map((thread) => (
+                <div
+                  key={thread.id}
+                  className={`group flex items-center gap-1 rounded ${
+                    thread.id === activeThreadId
+                      ? "bg-[var(--page-bg)] text-[var(--text)] shadow-sm"
+                      : "text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => selectThread(thread.id)}
+                    className="min-w-0 flex-1 truncate px-2 py-2 text-left text-xs"
+                    title={thread.title}
+                  >
+                    {thread.title || "New chat"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      deleteThread(thread.id);
+                    }}
+                    className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded text-[var(--faint)] opacity-0 hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100 focus:opacity-100"
+                    title="Delete chat"
+                  >
+                    <RiDeleteBinLine size={14} />
+                  </button>
+                </div>
+              ))
+            ) : (
+              <p className="rounded border border-dashed border-[var(--line)] px-2 py-2 text-xs text-[var(--muted)]">
+                No saved chats yet.
               </p>
-              <p className="whitespace-pre-wrap break-words">{message.content}</p>
-            </div>
-          ))
-        ) : (
-          <div className="rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--muted)]">
-            Ask about the current page, make a study plan, or have the model explain a concept.
+            )}
           </div>
         )}
-
-        {loading ? (
-          <div className="flex items-center gap-2 rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--muted)]">
-            <span>Thinking</span>
-            <span className="format-dot format-dot-one">.</span>
-            <span className="format-dot format-dot-two">.</span>
-            <span className="format-dot format-dot-three">.</span>
-          </div>
-        ) : null}
       </div>
 
-      <div className="border-t border-[var(--line)] p-3">
-        <textarea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              send();
-            }
-          }}
-          placeholder="Ask the model..."
-          className="min-h-24 w-full resize-none rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--faint)] focus:border-[var(--faint)] focus:bg-[var(--page-bg)]"
-        />
-        <div className="mt-2 flex items-center justify-end gap-2">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">AI chat</p>
+            <p className="truncate text-xs text-[var(--muted)]">Admin only</p>
+          </div>
           <button
             type="button"
-            onClick={stop}
-            disabled={!loading}
-            className="inline-flex h-8 items-center gap-1 rounded border border-[var(--line)] px-2 text-xs font-medium text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)] disabled:opacity-40"
+            onClick={close}
+            className="grid h-8 w-8 place-items-center rounded text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+            title="Close chat"
           >
-            <RiStopCircleLine size={15} />
-            Stop
+            <RiCloseLine size={18} />
           </button>
-          <button
-            type="button"
-            onClick={send}
-            disabled={loading || !input.trim()}
-            className="inline-flex h-8 items-center gap-1 rounded bg-[var(--text)] px-3 text-xs font-medium text-[var(--page-bg)] hover:opacity-90 disabled:opacity-40"
-          >
-            <RiSendPlane2Line size={15} />
-            Send
-          </button>
+        </div>
+
+        <div className="border-b border-[var(--line)] px-4 py-3 sm:hidden">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-[var(--muted)]">Chat history</p>
+            <button
+              type="button"
+              onClick={newChat}
+              className="rounded border border-[var(--line)] px-2 py-1 text-xs font-medium text-[var(--text)] hover:bg-[var(--hover)]"
+            >
+              New chat
+            </button>
+          </div>
+          <div className="notion-scrollbar flex gap-1 overflow-x-auto">
+            {threads.length ? (
+              threads.map((thread) => (
+                <button
+                  key={thread.id}
+                  type="button"
+                  onClick={() => selectThread(thread.id)}
+                  className={`max-w-32 shrink-0 truncate rounded px-2 py-1.5 text-left text-xs ${
+                    thread.id === activeThreadId
+                      ? "bg-[var(--hover)] text-[var(--text)]"
+                      : "text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+                  }`}
+                  title={thread.title}
+                >
+                  {thread.title || "New chat"}
+                </button>
+              ))
+            ) : (
+              <p className="rounded border border-dashed border-[var(--line)] px-2 py-2 text-xs text-[var(--muted)]">
+                No saved chats yet.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="notion-scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4">
+          {messages.length ? (
+            messages.map((message, index) => (
+              <div
+                key={`${message.role}-${index}`}
+                className={`rounded border border-[var(--line)] px-3 py-2 text-sm leading-6 ${
+                  message.role === "user" ? "bg-[var(--page-chip)]" : "bg-[var(--page-bg)]"
+                }`}
+              >
+                <p className="mb-1 text-xs font-semibold uppercase tracking-normal text-[var(--muted)]">
+                  {message.role === "user" ? "You" : modelIndicator?.label ?? "Owl Alpha"}
+                </p>
+                <p className="whitespace-pre-wrap break-words">{message.content}</p>
+              </div>
+            ))
+          ) : (
+            <div className="rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--muted)]">
+              Ask about this page, compare it with other pages, or ask the model to edit the current page.
+            </div>
+          )}
+
+          {shouldShowActivityStatus ? (
+            <div className="flex items-start gap-2 rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--muted)]">
+              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text)]" />
+              <div className="min-w-0">
+                <p className="truncate">
+                  {visibleActivity.at(-1)}
+                  <span className="format-dot format-dot-one">.</span>
+                  <span className="format-dot format-dot-two">.</span>
+                  <span className="format-dot format-dot-three">.</span>
+                </p>
+                <p className="mt-1 truncate text-xs text-[var(--faint)]">{visibleActivity.join(" -> ")}</p>
+              </div>
+            </div>
+          ) : loading ? (
+            <div className="flex items-center gap-2 rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--muted)]">
+              <span>Thinking</span>
+              <span className="format-dot format-dot-one">.</span>
+              <span className="format-dot format-dot-two">.</span>
+              <span className="format-dot format-dot-three">.</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="border-t border-[var(--line)] p-3">
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                send();
+              }
+            }}
+            placeholder="Ask the model..."
+            className="min-h-24 w-full resize-none rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--faint)] focus:border-[var(--faint)] focus:bg-[var(--page-bg)]"
+          />
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              {modelIndicator ? (
+                <div className="max-w-44 rounded border border-[var(--line)] bg-[var(--page-chip)] px-2 py-1">
+                  <p className="truncate text-[11px] font-medium text-[var(--text)]">{modelIndicator.label}</p>
+                  <p className="truncate text-[10px] text-[var(--muted)]">{modelIndicator.model}</p>
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--muted)]">Admin chat</p>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={stop}
+                disabled={!loading}
+                className="inline-flex h-8 items-center gap-1 rounded border border-[var(--line)] px-2 text-xs font-medium text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)] disabled:opacity-40"
+              >
+                <RiStopCircleLine size={15} />
+                Stop
+              </button>
+              <button
+                type="button"
+                onClick={send}
+                disabled={loading || !input.trim()}
+                className="inline-flex h-8 items-center gap-1 rounded bg-[var(--text)] px-3 text-xs font-medium text-[var(--page-bg)] hover:opacity-90 disabled:opacity-40"
+              >
+                <RiSendPlane2Line size={15} />
+                Send
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </aside>

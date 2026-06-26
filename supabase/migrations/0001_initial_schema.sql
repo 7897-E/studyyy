@@ -121,12 +121,25 @@ create trigger set_ai_provider_settings_updated_at
 before update on public.ai_provider_settings
 for each row execute function public.set_updated_at();
 
+drop trigger if exists set_admin_settings_updated_at on public.admin_settings;
+create trigger set_admin_settings_updated_at
+before update on public.admin_settings
+for each row execute function public.set_updated_at();
+
+drop trigger if exists set_ai_chat_threads_updated_at on public.ai_chat_threads;
+create trigger set_ai_chat_threads_updated_at
+before update on public.ai_chat_threads
+for each row execute function public.set_updated_at();
+
 alter table public.workspaces enable row level security;
 alter table public.pages enable row level security;
 alter table public.classes enable row level security;
 alter table public.format_requests enable row level security;
 alter table public.ai_provider_settings enable row level security;
 alter table public.admin_users enable row level security;
+alter table public.admin_settings enable row level security;
+alter table public.ai_chat_threads enable row level security;
+alter table public.ai_chat_messages enable row level security;
 
 drop policy if exists "Owners can manage workspaces" on public.workspaces;
 create policy "Owners can manage workspaces"
