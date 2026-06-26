@@ -2,12 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { WorkspaceShell } from "@/components/WorkspaceShell";
+import { useWorkspaceShell, WorkspaceShell } from "@/components/WorkspaceShell";
 import { supabase } from "@/lib/supabase";
-import { useWorkspace } from "@/hooks/useWorkspace";
 
 function HomeContent() {
-  const { workspace } = useWorkspace();
+  const { workspace } = useWorkspaceShell();
   const router = useRouter();
 
   useEffect(() => {

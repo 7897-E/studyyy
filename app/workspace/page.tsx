@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { RiMoreLine } from "react-icons/ri";
-import { WorkspaceShell } from "@/components/WorkspaceShell";
+import { useWorkspaceShell, WorkspaceShell } from "@/components/WorkspaceShell";
 import { supabase } from "@/lib/supabase";
 import {
   builtInPageTemplates,
@@ -14,7 +14,6 @@ import {
   type PageTemplate,
 } from "@/lib/pageTemplates";
 import { useClasses } from "@/hooks/useClasses";
-import { useWorkspace } from "@/hooks/useWorkspace";
 
 interface PageRow {
   id: string;
@@ -38,7 +37,7 @@ const GROUP_COLORS = [
 ];
 
 function HomeContent() {
-  const { workspace } = useWorkspace();
+  const { workspace } = useWorkspaceShell();
   const router = useRouter();
   const [pages, setPages] = useState<PageRow[]>([]);
   const [loading, setLoading] = useState(true);

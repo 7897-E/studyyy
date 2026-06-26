@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Block } from "@blocknote/core";
 import { useParams, useRouter } from "next/navigation";
 import { BlockEditor } from "@/components/BlockEditor";
@@ -29,6 +29,7 @@ function PageEditor() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+  const loadedSnapshotRef = useRef("");
 
   function saveAsTemplate() {
     saveUserPageTemplate({
@@ -73,10 +74,13 @@ function PageEditor() {
       }
 
       if (!cancelled) {
+        const nextBlocks = result.data.content?.blocks ?? [];
         setPage(result.data);
         setTitle(result.data.title ?? "Untitled");
         setClassName(result.data.class_name ?? "Unsorted");
-        setBlocks(result.data.content?.blocks ?? []);
+        setBlocks(nextBlocks);
+        loadedSnapshotRef.current = pageSnapshot(result.data.title ?? "Untitled", result.data.class_name ?? "Unsorted", nextBlocks);
+        setStatus("Saved");
         setLoading(false);
       }
     }
@@ -90,6 +94,9 @@ function PageEditor() {
 
   useEffect(() => {
     if (!page || loading) return;
+
+    const nextSnapshot = pageSnapshot(title.trim() || "Untitled", className.trim() || "Unsorted", blocks);
+    if (nextSnapshot === loadedSnapshotRef.current) return;
 
     const timer = window.setTimeout(async () => {
       setSaving(true);
@@ -117,6 +124,7 @@ function PageEditor() {
         setStatus(result.error.message);
       } else {
         setStatus("Saved");
+        loadedSnapshotRef.current = nextSnapshot;
       }
 
       setSaving(false);
@@ -125,8 +133,8 @@ function PageEditor() {
     return () => window.clearTimeout(timer);
   }, [blocks, className, loading, page, title]);
 
-  if (loading) {
-    return <div className="grid min-h-screen place-items-center text-sm text-[var(--muted)]">Loading page...</div>;
+  if (loading && !page) {
+    return <PageEditorSkeleton />;
   }
 
   return (
@@ -158,6 +166,27 @@ function PageEditor() {
         theme={theme}
         onStatus={setStatus}
       />
+    </article>
+  );
+}
+
+function pageSnapshot(title: string, className: string, blocks: Block[]) {
+  return JSON.stringify({ title, className, blocks });
+}
+
+function PageEditorSkeleton() {
+  return (
+    <article className="mx-auto w-full max-w-4xl px-10 py-16">
+      <div className="h-14 w-2/3 rounded bg-[var(--page-chip)]" />
+      <div className="sticky top-0 z-10 -mx-10 mb-8 mt-3 flex items-center justify-between border-b border-transparent bg-[var(--page-bg-translucent)] px-10 py-2 backdrop-blur">
+        <div className="h-5 w-24 rounded bg-[var(--page-chip)]" />
+        <div className="h-7 w-28 rounded border border-[var(--line)] bg-[var(--page-bg)]" />
+      </div>
+      <div className="space-y-2">
+        <div className="h-6 w-full rounded bg-[var(--page-chip)]" />
+        <div className="h-6 w-5/6 rounded bg-[var(--page-chip)]" />
+        <div className="h-6 w-3/4 rounded bg-[var(--page-chip)]" />
+      </div>
     </article>
   );
 }

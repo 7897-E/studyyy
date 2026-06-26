@@ -78,10 +78,42 @@ const cssVariableByColor: Record<keyof CustomTheme, string> = {
   scrollTrack: "--scroll-track",
 };
 
+function readInitialThemeMode(): ThemeMode {
+  if (typeof window === "undefined") return "light";
+
+  const savedTheme = window.localStorage.getItem("studyyy-theme");
+  if (savedTheme === "light" || savedTheme === "dark" || savedTheme === "custom") return savedTheme;
+
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function readInitialCustomTheme(): CustomTheme {
+  if (typeof window === "undefined") return defaultCustomTheme;
+
+  try {
+    return { ...defaultCustomTheme, ...JSON.parse(window.localStorage.getItem("studyyy-custom-theme") || "{}") };
+  } catch {
+    return defaultCustomTheme;
+  }
+}
+
+function readInitialInterfaceSettings(): InterfaceSettings {
+  if (typeof window === "undefined") return defaultInterfaceSettings;
+
+  try {
+    return {
+      ...defaultInterfaceSettings,
+      ...JSON.parse(window.localStorage.getItem("studyyy-interface-settings") || "{}"),
+    };
+  } catch {
+    return defaultInterfaceSettings;
+  }
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [mode, setMode] = useState<ThemeMode>("light");
-  const [customTheme, setCustomTheme] = useState<CustomTheme>(defaultCustomTheme);
-  const [interfaceSettings, setInterfaceSettings] = useState<InterfaceSettings>(defaultInterfaceSettings);
+  const [mode, setMode] = useState<ThemeMode>(() => readInitialThemeMode());
+  const [customTheme, setCustomTheme] = useState<CustomTheme>(() => readInitialCustomTheme());
+  const [interfaceSettings, setInterfaceSettings] = useState<InterfaceSettings>(() => readInitialInterfaceSettings());
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("studyyy-theme");

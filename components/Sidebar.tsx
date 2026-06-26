@@ -178,7 +178,7 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
 
   async function signOut() {
     await supabase.auth.signOut();
-    router.push("/auth");
+    router.replace("/auth");
   }
 
   async function saveAccountSettings() {
@@ -239,7 +239,7 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
     }
 
     await supabase.auth.signOut();
-    router.push("/auth");
+    router.replace("/auth");
   }
 
   async function deletePage(pageId: string) {
@@ -252,7 +252,7 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
     }
 
     if (pathname === `/pages/${pageId}`) {
-      router.push("/");
+      router.replace("/");
     }
   }
 
