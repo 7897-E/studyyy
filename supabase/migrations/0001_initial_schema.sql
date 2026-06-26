@@ -63,9 +63,38 @@ create table if not exists public.admin_users (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.admin_settings (
+  key text primary key,
+  value jsonb not null default '{}'::jsonb,
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.ai_chat_threads (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid references public.workspaces(id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  title text not null default 'New chat',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.ai_chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid not null references public.ai_chat_threads(id) on delete cascade,
+  role text not null check (role in ('user', 'assistant')),
+  content text not null,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 insert into public.admin_users (email)
 values ('reyeemia1@gmail.com')
 on conflict (email) do nothing;
+
+insert into public.admin_settings (key, value)
+values ('chat_model', '{"provider":"openrouter","model":"openrouter/owl-alpha"}'::jsonb)
+on conflict (key) do nothing;
 
 create or replace function public.set_updated_at()
 returns trigger
