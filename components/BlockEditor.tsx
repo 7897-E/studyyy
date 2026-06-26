@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Block, PartialBlock } from "@blocknote/core";
 import {
   BlockNoteSchema,
@@ -18,9 +18,13 @@ import {
 import { BlockNoteView } from "@blocknote/mantine";
 import { flip, offset, shift, size } from "@floating-ui/react";
 import {
+  RiCloseLine,
+  RiChat3Line,
   RiLayoutColumnLine,
   RiMagicLine,
   RiMicLine,
+  RiSendPlane2Line,
+  RiStopCircleLine,
   RiStickyNoteLine,
 } from "react-icons/ri";
 import {
@@ -30,6 +34,8 @@ import {
   withMultiColumn,
 } from "@blocknote/xl-multi-column";
 import { supabase } from "@/lib/supabase";
+import { useAdminStatus } from "@/hooks/useAdminStatus";
+import { useAuth } from "@/hooks/useAuth";
 
 interface BlockEditorProps {
   initialBlocks?: Block[];
@@ -128,6 +134,11 @@ type FormatProgressState = {
   top: number;
 } | null;
 
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 const DICTATION_CONSENT_KEY = "studyyy-lecture-dictation-consent";
 
 export function BlockEditor({
@@ -139,14 +150,21 @@ export function BlockEditor({
   theme,
   onStatus,
 }: BlockEditorProps) {
+  const { user } = useAuth();
+  const { isAdmin } = useAdminStatus(user);
   const [dateTimePicker, setDateTimePicker] = useState<DateTimePickerState>(null);
   const [formatProgress, setFormatProgress] = useState<FormatProgressState>(null);
   const [customTime, setCustomTime] = useState("");
   const [dictating, setDictating] = useState(false);
   const [dictationConsentOpen, setDictationConsentOpen] = useState(false);
   const [dictationText, setDictationText] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
   const recognitionRef = useRef<any>(null);
   const formattingRef = useRef(false);
+  const chatAbortRef = useRef<AbortController | null>(null);
   const editor = useCreateBlockNote(
     {
       schema: editorSchema,
@@ -357,6 +375,77 @@ export function BlockEditor({
     onStatus("Added dictated notes.");
   }
 
+  async function sendChatMessage() {
+    const message = chatInput.trim();
+    if (!message || chatLoading) return;
+
+    const nextMessages: ChatMessage[] = [...chatMessages, { role: "user", content: message }];
+    setChatMessages(nextMessages);
+    setChatInput("");
+    setChatLoading(true);
+    onStatus("Sending chat message...");
+
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      if (!token) {
+        throw new Error("Sign in again to use admin chat.");
+      }
+
+      const pageContext = (await editor.blocksToMarkdownLossy(editor.document)).trim() || blocksToPlainText(editor.document).trim();
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/chat-notes`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          messages: nextMessages.slice(-12),
+          pageContext,
+          pageId,
+          workspaceId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Chat request failed.");
+      }
+
+      if (!data?.reply) {
+        throw new Error("No chat response returned.");
+      }
+
+      setChatMessages((current) => [...current, { role: "assistant", content: data.reply }]);
+      onStatus("Chat response received.");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        onStatus("Chat stopped.");
+        return;
+      }
+
+      onStatus(error instanceof Error ? error.message : "Chat failed.");
+    } finally {
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null;
+      }
+      setChatLoading(false);
+    }
+  }
+
+  function stopChat() {
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
+    setChatLoading(false);
+  }
+
   return (
     <>
       <BlockNoteView
@@ -411,6 +500,18 @@ export function BlockEditor({
                   icon: <RiMagicLine size={18} />,
                   onItemClick: formatDocument,
                 },
+                ...(isAdmin
+                  ? [
+                      {
+                        title: "Chat",
+                        subtext: "Open admin-only AI chat",
+                        aliases: ["chat", "ask", "assistant", "ai chat"],
+                        group: "AI",
+                        icon: <RiChat3Line size={18} />,
+                        onItemClick: () => setChatOpen(true),
+                      },
+                    ]
+                  : []),
                 ...getStudySlashMenuItems(editor, formatDocument, openDateTimePicker),
                 ...getCustomColumnItems(editor),
                 ...getDefaultReactSlashMenuItems(editor),
@@ -446,6 +547,18 @@ export function BlockEditor({
       ) : null}
 
       {formatProgress ? <FormatProgressPopover progress={formatProgress} /> : null}
+
+      {chatOpen && isAdmin ? (
+        <AdminChatSidebar
+          messages={chatMessages}
+          input={chatInput}
+          loading={chatLoading}
+          setInput={setChatInput}
+          close={() => setChatOpen(false)}
+          send={sendChatMessage}
+          stop={stopChat}
+        />
+      ) : null}
     </>
   );
 }
@@ -1087,6 +1200,109 @@ function FormatProgressPopover({ progress }: { progress: Exclude<FormatProgressS
         </div>
       </div>
     </div>
+  );
+}
+
+function AdminChatSidebar({
+  messages,
+  input,
+  loading,
+  setInput,
+  close,
+  send,
+  stop,
+}: {
+  messages: ChatMessage[];
+  input: string;
+  loading: boolean;
+  setInput: (value: string) => void;
+  close: () => void;
+  send: () => void;
+  stop: () => void;
+}) {
+  return (
+    <aside className="fixed right-0 top-0 z-[280] flex h-screen w-[min(380px,100vw)] flex-col border-l border-[var(--line)] bg-[var(--page-bg)] text-[var(--text)] shadow-2xl">
+      <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">AI chat</p>
+          <p className="truncate text-xs text-[var(--muted)]">Admin only</p>
+        </div>
+        <button
+          type="button"
+          onClick={close}
+          className="grid h-8 w-8 place-items-center rounded text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+          title="Close chat"
+        >
+          <RiCloseLine size={18} />
+        </button>
+      </div>
+
+      <div className="notion-scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4">
+        {messages.length ? (
+          messages.map((message, index) => (
+            <div
+              key={`${message.role}-${index}`}
+              className={`rounded border border-[var(--line)] px-3 py-2 text-sm leading-6 ${
+                message.role === "user" ? "bg-[var(--page-chip)]" : "bg-[var(--page-bg)]"
+              }`}
+            >
+              <p className="mb-1 text-xs font-semibold uppercase tracking-normal text-[var(--muted)]">
+                {message.role === "user" ? "You" : "Owl Alpha"}
+              </p>
+              <p className="whitespace-pre-wrap break-words">{message.content}</p>
+            </div>
+          ))
+        ) : (
+          <div className="rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--muted)]">
+            Ask about the current page, make a study plan, or have the model explain a concept.
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center gap-2 rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--muted)]">
+            <span>Thinking</span>
+            <span className="format-dot format-dot-one">.</span>
+            <span className="format-dot format-dot-two">.</span>
+            <span className="format-dot format-dot-three">.</span>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="border-t border-[var(--line)] p-3">
+        <textarea
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              send();
+            }
+          }}
+          placeholder="Ask the model..."
+          className="min-h-24 w-full resize-none rounded border border-[var(--line)] bg-[var(--page-chip)] px-3 py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--faint)] focus:border-[var(--faint)] focus:bg-[var(--page-bg)]"
+        />
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={stop}
+            disabled={!loading}
+            className="inline-flex h-8 items-center gap-1 rounded border border-[var(--line)] px-2 text-xs font-medium text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)] disabled:opacity-40"
+          >
+            <RiStopCircleLine size={15} />
+            Stop
+          </button>
+          <button
+            type="button"
+            onClick={send}
+            disabled={loading || !input.trim()}
+            className="inline-flex h-8 items-center gap-1 rounded bg-[var(--text)] px-3 text-xs font-medium text-[var(--page-bg)] hover:opacity-90 disabled:opacity-40"
+          >
+            <RiSendPlane2Line size={15} />
+            Send
+          </button>
+        </div>
+      </div>
+    </aside>
   );
 }
 

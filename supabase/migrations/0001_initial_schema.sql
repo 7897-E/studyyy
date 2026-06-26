@@ -56,6 +56,17 @@ create table if not exists public.ai_provider_settings (
   unique (workspace_id, provider)
 );
 
+create table if not exists public.admin_users (
+  id uuid primary key default gen_random_uuid(),
+  email text not null unique,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+insert into public.admin_users (email)
+values ('reyeemia1@gmail.com')
+on conflict (email) do nothing;
+
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
@@ -86,6 +97,7 @@ alter table public.pages enable row level security;
 alter table public.classes enable row level security;
 alter table public.format_requests enable row level security;
 alter table public.ai_provider_settings enable row level security;
+alter table public.admin_users enable row level security;
 
 drop policy if exists "Owners can manage workspaces" on public.workspaces;
 create policy "Owners can manage workspaces"

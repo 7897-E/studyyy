@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { RiMoonLine, RiSettings3Line, RiSunLine } from "react-icons/ri";
+import { RiMoonLine, RiShieldUserLine, RiSettings3Line, RiSunLine } from "react-icons/ri";
 import { supabase } from "@/lib/supabase";
 import {
   builtInPageTemplates,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/pageTemplates";
 import { useTheme } from "@/components/ThemeContext";
 import type { Workspace } from "@/hooks/useWorkspace";
+import { useAdminStatus } from "@/hooks/useAdminStatus";
 
 interface PageRecord {
   id: string;
@@ -22,10 +23,23 @@ interface PageRecord {
   icon: string | null;
 }
 
+interface AdminPanelUser {
+  id: string;
+  email: string;
+  createdAt?: string;
+  lastSignInAt?: string;
+  isAdmin: boolean;
+  isRootAdmin: boolean;
+}
+
 export function Sidebar({ workspace, user }: { workspace: Workspace; user: User }) {
   const [pages, setPages] = useState<PageRecord[]>([]);
   const [creating, setCreating] = useState(false);
   const [deleteMenuPageId, setDeleteMenuPageId] = useState<string | null>(null);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const [adminUsers, setAdminUsers] = useState<AdminPanelUser[]>([]);
+  const [adminStatus, setAdminStatus] = useState("");
+  const [adminLoading, setAdminLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newPageMenuOpen, setNewPageMenuOpen] = useState(false);
   const [userTemplates, setUserTemplates] = useState<PageTemplate[]>([]);
@@ -47,6 +61,7 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
     updateInterfaceSetting,
     resetInterfaceSettings,
   } = useTheme();
+  const { isAdmin } = useAdminStatus(user);
   const pathname = usePathname();
   const router = useRouter();
 
@@ -59,7 +74,7 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
   }, [workspace.name]);
 
   useEffect(() => {
-    if (!settingsOpen && !deleteMenuPageId && !newPageMenuOpen) return;
+    if (!settingsOpen && !adminPanelOpen && !deleteMenuPageId && !newPageMenuOpen) return;
 
     function closePopupsOnOutsideClick(event: PointerEvent) {
       const target = event.target;
@@ -69,13 +84,14 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
       }
 
       setSettingsOpen(false);
+      setAdminPanelOpen(false);
       setDeleteMenuPageId(null);
       setNewPageMenuOpen(false);
     }
 
     document.addEventListener("pointerdown", closePopupsOnOutsideClick);
     return () => document.removeEventListener("pointerdown", closePopupsOnOutsideClick);
-  }, [deleteMenuPageId, newPageMenuOpen, settingsOpen]);
+  }, [adminPanelOpen, deleteMenuPageId, newPageMenuOpen, settingsOpen]);
 
   useEffect(() => {
     setUserTemplates(getUserPageTemplates());
@@ -231,6 +247,53 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
     }
   }
 
+  async function openAdminPanel() {
+    const nextOpen = !adminPanelOpen;
+    setAdminPanelOpen(nextOpen);
+    setSettingsOpen(false);
+
+    if (nextOpen) {
+      loadAdminPanel();
+    }
+  }
+
+  async function loadAdminPanel() {
+    setAdminLoading(true);
+    setAdminStatus("");
+
+    const { data, error } = await supabase.functions.invoke("admin-users", {
+      body: { action: "list" },
+    });
+
+    setAdminLoading(false);
+
+    if (error) {
+      setAdminStatus(error.message);
+      return;
+    }
+
+    setAdminUsers(data?.users ?? []);
+  }
+
+  async function updateAdminUser(email: string, action: "grant" | "revoke") {
+    setAdminLoading(true);
+    setAdminStatus("");
+
+    const { data, error } = await supabase.functions.invoke("admin-users", {
+      body: { action, email },
+    });
+
+    setAdminLoading(false);
+
+    if (error) {
+      setAdminStatus(error.message);
+      return;
+    }
+
+    setAdminUsers(data?.users ?? []);
+    setAdminStatus(action === "grant" ? "Admin status granted." : "Admin status revoked.");
+  }
+
   return (
     <aside className="fixed inset-y-0 left-0 z-20 flex w-[var(--sidebar-width)] flex-col border-r border-[var(--line)] bg-[var(--sidebar-bg)] p-2 text-sm text-[var(--muted)]">
       <Link href="/workspace" className="mb-4 flex h-9 items-center gap-2 rounded px-2 font-semibold text-[var(--text)] hover:bg-[var(--hover)]">
@@ -303,9 +366,33 @@ export function Sidebar({ workspace, user }: { workspace: Workspace; user: User 
 
       <div className="border-t border-[var(--line)] pt-3">
         <p className="mb-2 truncate px-2 text-xs">{user.email}</p>
+        {isAdmin ? (
+          <div data-sidebar-popup className="relative mb-2">
+            <button
+              onClick={openAdminPanel}
+              className="flex min-h-9 w-full items-center justify-center gap-2 rounded border border-[var(--line)] bg-[var(--page-bg)] px-2 font-medium text-[var(--text)] shadow-sm transition hover:bg-[var(--hover)]"
+              title="Admin panel"
+            >
+              <RiShieldUserLine size={16} />
+              Admin
+            </button>
+            {adminPanelOpen ? (
+              <AdminPanel
+                users={adminUsers}
+                loading={adminLoading}
+                status={adminStatus}
+                refresh={loadAdminPanel}
+                updateAdminUser={updateAdminUser}
+              />
+            ) : null}
+          </div>
+        ) : null}
         <div data-sidebar-popup className="relative mb-2">
           <button
-            onClick={() => setSettingsOpen((open) => !open)}
+            onClick={() => {
+              setSettingsOpen((open) => !open);
+              setAdminPanelOpen(false);
+            }}
             className="flex min-h-9 w-full items-center justify-center gap-2 rounded border border-[var(--line)] bg-[var(--page-bg)] px-2 font-medium text-[var(--text)] shadow-sm transition hover:bg-[var(--hover)]"
             title="Settings"
           >
@@ -475,6 +562,90 @@ function getUserDisplayName(user: User) {
   return typeof user.user_metadata?.full_name === "string" && user.user_metadata.full_name.trim()
     ? user.user_metadata.full_name.trim()
     : user.email?.split("@")[0] ?? "";
+}
+
+function AdminPanel({
+  users,
+  loading,
+  status,
+  refresh,
+  updateAdminUser,
+}: {
+  users: AdminPanelUser[];
+  loading: boolean;
+  status: string;
+  refresh: () => void;
+  updateAdminUser: (email: string, action: "grant" | "revoke") => void;
+}) {
+  return (
+    <div className="notion-scrollbar absolute bottom-11 left-0 z-50 max-h-[calc(100vh-5rem)] w-80 overflow-y-auto rounded border border-[var(--line)] bg-[var(--page-bg)] p-3 text-[var(--text)] shadow-xl">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold">Admin panel</p>
+          <p className="text-xs text-[var(--muted)]">Manage admin access</p>
+        </div>
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={loading}
+          className="h-7 rounded border border-[var(--line)] px-2 text-xs text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)] disabled:opacity-50"
+        >
+          {loading ? "Loading" : "Refresh"}
+        </button>
+      </div>
+
+      {status ? (
+        <p className="mb-2 rounded border border-[var(--line)] bg-[var(--page-chip)] px-2 py-1.5 text-xs text-[var(--muted)]">
+          {status}
+        </p>
+      ) : null}
+
+      <div className="space-y-1">
+        {users.length ? (
+          users.map((panelUser) => (
+            <div
+              key={panelUser.id}
+              className="flex items-center gap-2 rounded border border-[var(--line)] bg-[var(--page-chip)] px-2 py-2"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium text-[var(--text)]">{panelUser.email || "No email"}</p>
+                <p className="text-[11px] text-[var(--muted)]">
+                  {panelUser.isRootAdmin ? "Root admin" : panelUser.isAdmin ? "Admin" : "User"}
+                </p>
+              </div>
+              {panelUser.isRootAdmin ? (
+                <span className="rounded border border-[var(--line)] bg-[var(--page-bg)] px-2 py-1 text-[11px] text-[var(--muted)]">
+                  Locked
+                </span>
+              ) : panelUser.isAdmin ? (
+                <button
+                  type="button"
+                  onClick={() => updateAdminUser(panelUser.email, "revoke")}
+                  disabled={loading}
+                  className="rounded px-2 py-1 text-xs font-medium text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+                >
+                  Revoke
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => updateAdminUser(panelUser.email, "grant")}
+                  disabled={loading || !panelUser.email}
+                  className="rounded bg-[var(--text)] px-2 py-1 text-xs font-medium text-[var(--page-bg)] hover:opacity-90 disabled:opacity-50"
+                >
+                  Make admin
+                </button>
+              )}
+            </div>
+          ))
+        ) : (
+          <p className="rounded border border-[var(--line)] bg-[var(--page-chip)] px-2 py-3 text-center text-xs text-[var(--muted)]">
+            {loading ? "Loading users..." : "No users found."}
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function SettingsSegmentedControl({
